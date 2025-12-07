@@ -1,164 +1,110 @@
-import os
-import io
-import base64
+import streamlit as st
 import pandas as pd
-import numpy as np
-from flask import Flask, render_template, request
-
-# --- MATPLOTLIB SETUP ---
-# This fixes "RuntimeError: main thread is not in main loop"
-import matplotlib
-matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
-
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
-app = Flask(__name__)
+# --- 1. SETUP PAGE ---
+st.set_page_config(page_title="Liver Disease Detector", layout="wide")
+st.title("🏥 Liver Disease Detection AI")
 
-# --- GLOBAL VARIABLES ---
-model = None
-tree_image_data = None
-DATASET_FILE = 'Liver Patient Dataset (LPD)_train.csv'
-STATUS_MESSAGE = ""
+# --- 2. ROBUST DATA LOADING ---
+# This block tries to find the file. If not found, it asks you to upload it.
+data = None
+default_file = "Liver Patient Dataset (LPD)_train.csv"
 
-def load_and_train():
-    global model, tree_image_data, STATUS_MESSAGE
+try:
+    data = pd.read_csv(default_file, encoding='latin1')
+    st.success(f"✅ Automatically loaded '{default_file}'")
+except FileNotFoundError:
+    st.warning(f"⚠️ Could not find '{default_file}' automatically.")
+    st.info("👉 Please drag and drop your 'Liver Patient Dataset (LPD)_train.csv' file below:")
+    uploaded_file = st.file_uploader("Upload CSV", type="csv")
+    if uploaded_file is not None:
+        data = pd.read_csv(uploaded_file, encoding='latin1')
+
+# --- 3. MAIN APPLICATION LOGIC ---
+if data is not None:
+    # > DATA CLEANING
+    # Standardize column names to prevent KeyErrors
+    # Expected order based on your file: Age, Gender, TB, DB, Alkphos, Sgpt, Sgot, TP, ALB, A/G, Result
+    if len(data.columns) >= 11:
+        data.columns = ['Age', 'Gender', 'Total_Bilirubin', 'Direct_Bilirubin', 
+                        'Alkphos', 'Sgpt', 'Sgot', 'Total_Protiens', 
+                        'ALB', 'A_G_Ratio', 'Result']
     
-    print("-" * 50)
-    print("STARTING APP INITIALIZATION...")
-
-    # 1. CHECK IF FILE EXISTS
-    if not os.path.exists(DATASET_FILE):
-        STATUS_MESSAGE = f"ERROR: '{DATASET_FILE}' not found. Using DUMMY data."
-        print(f"!!! {STATUS_MESSAGE}")
-        df = generate_dummy_data()
-    else:
-        try:
-            print(f"Loading dataset: {DATASET_FILE}")
-            df = pd.read_csv(DATASET_FILE, encoding='latin1')
-            
-            # RENAME COLUMNS (Sanitize names)
-            df.columns = ['Age', 'Gender', 'Total_Bilirubin', 'Direct_Bilirubin', 
-                          'Alkaline_Phosphotase', 'Alamine_Aminotransferase', 
-                          'Aspartate_Aminotransferase', 'Total_Protiens', 
-                          'Albumin', 'Albumin_and_Globulin_Ratio', 'Result']
-            
-            # CLEANING
-            # 1. Fill Numerical NaNs with Mean
-            num_cols = df.select_dtypes(include=['number']).columns
-            df[num_cols] = df[num_cols].fillna(df[num_cols].mean())
-            
-            # 2. Fill Categorical NaNs and Map Gender
-            df['Gender'] = df['Gender'].fillna(df['Gender'].mode()[0])
-            df['Gender'] = df['Gender'].map({'Male': 1, 'Female': 0})
-            
-            # 3. Handle Target (1=Disease, 2=No Disease -> 1=Disease, 0=No Disease)
-            df['Result'] = df['Result'].map({1: 1, 2: 0})
-            
-            STATUS_MESSAGE = "Model trained on REAL dataset."
-            print("Dataset loaded and cleaned successfully.")
-
-        except Exception as e:
-            STATUS_MESSAGE = f"Data Error: {str(e)}. Using DUMMY data."
-            print(f"!!! {STATUS_MESSAGE}")
-            df = generate_dummy_data()
-
-    # 2. TRAIN MODEL
-    try:
-        X = df.drop('Result', axis=1)
-        y = df['Result']
-        
-        # Check if X has any remaining NaNs (fail-safe)
-        X = X.fillna(0) 
-
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        model = DecisionTreeClassifier(max_depth=4, random_state=42)
-        model.fit(X_train, y_train)
-        
-        acc = accuracy_score(y_test, model.predict(X_test))
-        print(f"Model Training Complete. Accuracy: {acc*100:.2f}%")
-        
-        # 3. GENERATE IMAGE
-        print("Generating Decision Tree Image...")
-        feature_names = X.columns.tolist()
-        plt.figure(figsize=(20, 10))
-        plot_tree(model, feature_names=feature_names, class_names=['Healthy', 'Disease'], filled=True, fontsize=10)
-        
-        img_buffer = io.BytesIO()
-        plt.savefig(img_buffer, format='png', bbox_inches='tight')
-        plt.close()
-        img_buffer.seek(0)
-        tree_image_data = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-        print("Image generated.")
-
-    except Exception as e:
-        print(f"!!! Training/Plotting Failed: {e}")
-        STATUS_MESSAGE += f" | Training Failed: {e}"
-
-def generate_dummy_data():
-    # Fallback function to prevent crash if CSV is missing
-    print("Generating synthetic backup data...")
-    data = []
-    for _ in range(200):
-        # Create fake healthy/unhealthy people
-        age = np.random.randint(20, 80)
-        gender = np.random.randint(0, 2)
-        tb = np.random.uniform(0.4, 5.0)
-        result = 1 if tb > 2.0 else 0 # Simple fake rule
-        data.append([age, gender, tb, 0.5, 200, 40, 40, 6.0, 3.0, 1.0, result])
+    # Handle Missing Values
+    data['Gender'] = data['Gender'].fillna(data['Gender'].mode()[0])
+    data['Gender'] = data['Gender'].map({'Male': 1, 'Female': 0})
     
-    return pd.DataFrame(data, columns=['Age', 'Gender', 'Total_Bilirubin', 'Direct_Bilirubin', 
-                                       'Alkaline_Phosphotase', 'Alamine_Aminotransferase', 
-                                       'Aspartate_Aminotransferase', 'Total_Protiens', 
-                                       'Albumin', 'Albumin_and_Globulin_Ratio', 'Result'])
+    # Fill numeric NaNs with mean
+    for col in data.columns:
+        if col != 'Gender' and col != 'Result':
+            data[col] = data[col].fillna(data[col].mean())
 
-# Initialize App
-load_and_train()
+    # Map Result: 1=Disease, 2=Healthy -> Change 2 to 0 for standard logic
+    data['Result'] = data['Result'].map({1: 1, 2: 0})
 
-# --- ROUTES ---
+    # > TRAIN MODEL
+    X = data.drop('Result', axis=1)
+    y = data['Result']
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = DecisionTreeClassifier(max_depth=4, criterion='entropy', random_state=42)
+    model.fit(X_train, y_train)
+    
+    acc = accuracy_score(y_test, model.predict(X_test))
+    
+    # > SIDEBAR INPUTS
+    st.sidebar.header("Patient Details")
+    name = st.sidebar.text_input("Patient Name", "John Doe")
+    weight = st.sidebar.number_input("Weight (kg)", 0.0, 200.0, 75.0) # Used for record, not prediction
+    
+    st.sidebar.header("Clinical Symptoms")
+    age = st.sidebar.number_input("Age", 1, 100, 45)
+    gender_txt = st.sidebar.selectbox("Gender", ["Male", "Female"])
+    gender = 1 if gender_txt == "Male" else 0
+    
+    # Clinical Features
+    tb = st.sidebar.number_input("Total Bilirubin", 0.0, 50.0, 0.7)
+    db = st.sidebar.number_input("Direct Bilirubin", 0.0, 30.0, 0.1)
+    alkphos = st.sidebar.number_input("Alkaline Phosphotase", 0.0, 2000.0, 187.0)
+    sgpt = st.sidebar.number_input("Alamine Aminotransferase", 0.0, 2000.0, 16.0)
+    sgot = st.sidebar.number_input("Aspartate Aminotransferase", 0.0, 2000.0, 18.0)
+    tp = st.sidebar.number_input("Total Proteins", 0.0, 15.0, 6.8)
+    alb = st.sidebar.number_input("Albumin", 0.0, 10.0, 3.3)
+    ag = st.sidebar.number_input("A/G Ratio", 0.0, 5.0, 0.9)
 
-@app.route('/')
-def home():
-    return render_template('index.html', tree_image=tree_image_data, status=STATUS_MESSAGE)
-
-@app.route('/predict', methods=['POST'])
-def predict():
-    if model is None:
-        return "Error: Model is not loaded. Check server logs."
-
-    try:
-        # Get form data
-        val_names = ['age', 'gender', 'total_bilirubin', 'direct_bilirubin', 'alkphos', 
-                     'sgpt', 'sgot', 'total_protiens', 'albumin', 'ag_ratio']
+    # > PREDICTION
+    st.divider()
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.subheader("Patient Record")
+        st.write(f"**Name:** {name}")
+        st.write(f"**Weight:** {weight} kg")
+        st.write(f"**Gender:** {gender_txt}")
         
-        features = [float(request.form[v]) for v in val_names]
-        name = request.form['name']
-        
-        # Predict
-        prediction = model.predict([features])[0]
-        
-        if prediction == 1:
-            res = "LIVER DISEASE DETECTED"
-            col = "#e74c3c" # Red
-            adv = "High probability of liver disease based on provided symptoms."
-        else:
-            res = "NO LIVER DISEASE DETECTED"
-            col = "#27ae60" # Green
-            adv = "Values appear to be within the healthy range."
+    with col2:
+        if st.button("🔍 Run Diagnosis", type="primary"):
+            input_data = [[age, gender, tb, db, alkphos, sgpt, sgot, tp, alb, ag]]
+            prediction = model.predict(input_data)[0]
             
-        return render_template('index.html', 
-                               prediction_text=res, 
-                               name=name, 
-                               color=col, 
-                               advice=adv, 
-                               tree_image=tree_image_data,
-                               status=STATUS_MESSAGE,
-                               scroll="result")
-                               
-    except Exception as e:
-        return f"Prediction Error: {e}"
+            if prediction == 1:
+                st.error("### 🔴 Result: LIVER DISEASE DETECTED")
+                st.write("The symptoms match patterns associated with liver pathology.")
+            else:
+                st.success("### 🟢 Result: NO DISEASE DETECTED")
+                st.write("The symptoms match patterns of a healthy liver.")
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # > DECISION TREE VISUALIZATION
+    st.divider()
+    st.subheader("Visualization of Decision Logic")
+    if st.checkbox("Show Decision Tree"):
+        fig, ax = plt.subplots(figsize=(20, 10))
+        plot_tree(model, feature_names=X.columns, class_names=['Healthy', 'Disease'], filled=True, fontsize=10)
+        st.pyplot(fig)
+
+else:
+    st.info("Waiting for dataset... Upload your CSV file to begin.")
