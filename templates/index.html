@@ -1,77 +1,122 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Liver Disease Detector</title>
-    <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; padding: 20px; }
-        .container { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); max-width: 800px; margin: 0 auto; }
-        
-        .status-bar { background: #fff3cd; color: #856404; padding: 10px; text-align: center; border-radius: 5px; margin-bottom: 20px; font-size: 0.9em; border: 1px solid #ffeeba; }
-        
-        h1 { text-align: center; color: #2c3e50; }
-        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px; }
-        label { display: block; margin-bottom: 5px; font-weight: 600; color: #555; }
-        input, select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; }
-        
-        button { width: 100%; padding: 15px; background: #3498db; color: white; border: none; border-radius: 5px; font-size: 1.1em; cursor: pointer; margin-top: 25px; }
-        button:hover { background: #2980b9; }
-        
-        .result-box { margin-top: 30px; padding: 20px; border-radius: 8px; text-align: center; color: white; }
-        .tree-section { margin-top: 40px; text-align: center; border-top: 1px solid #eee; padding-top: 20px; }
-        .tree-section img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 5px; }
-    </style>
-</head>
-<body>
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 
-<div class="container">
-    {% if status %}
-    <div class="status-bar"><strong>System Status:</strong> {{ status }}</div>
-    {% endif %}
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="Liver Disease AI", layout="centered")
 
-    <h1>Liver Disease Detector</h1>
+# --- HEADER ---
+st.title("🏥 Liver Disease Detection AI")
+st.write("This system uses a **Decision Tree Classifier** to predict liver disease based on clinical data.")
+
+# --- LOAD AND TRAIN MODEL (Cached for Speed) ---
+@st.cache_resource
+def load_and_train_model():
+    try:
+        # Load Data
+        df = pd.read_csv('Liver Patient Dataset (LPD)_train.csv', encoding='latin1')
+        
+        # Rename Columns
+        df.columns = ['Age', 'Gender', 'Total_Bilirubin', 'Direct_Bilirubin', 
+                      'Alkaline_Phosphotase', 'Alamine_Aminotransferase', 
+                      'Aspartate_Aminotransferase', 'Total_Protiens', 
+                      'Albumin', 'Albumin_and_Globulin_Ratio', 'Result']
+
+        # Cleaning
+        numerical_cols = df.select_dtypes(include=['number']).columns
+        df[numerical_cols] = df[numerical_cols].fillna(df[numerical_cols].mean())
+        df['Gender'] = df['Gender'].fillna(df['Gender'].mode()[0])
+        df['Gender'] = df['Gender'].map({'Male': 1, 'Female': 0})
+        df['Result'] = df['Result'].map({1: 1, 2: 0}) # 1=Disease, 0=Healthy
+
+        # Split
+        X = df.drop('Result', axis=1)
+        y = df['Result']
+        
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        
+        # Train
+        model = DecisionTreeClassifier(max_depth=4, criterion='entropy', random_state=42)
+        model.fit(X_train, y_train)
+        
+        accuracy = accuracy_score(y_test, model.predict(X_test))
+        return model, accuracy, X.columns.tolist()
+
+    except FileNotFoundError:
+        return None, None, None
+
+model, accuracy, feature_names = load_and_train_model()
+
+# --- ERROR HANDLING ---
+if model is None:
+    st.error("🚨 CRITICAL ERROR: Dataset not found!")
+    st.warning("Please make sure 'Liver Patient Dataset (LPD)_train.csv' is in the same folder as this script.")
+    st.stop() # Stop execution here
+
+st.success(f"✅ Model Trained Successfully! Accuracy: {accuracy*100:.2f}%")
+
+# --- USER INPUT FORM ---
+st.sidebar.header("Patient Data Entry")
+st.sidebar.write("Enter the clinical values below:")
+
+def user_input_features():
+    name = st.sidebar.text_input("Patient Name", "John Doe")
+    age = st.sidebar.number_input("Age", 1, 100, 45)
+    gender = st.sidebar.selectbox("Gender", ("Male", "Female"))
+    weight = st.sidebar.number_input("Weight (kg)", 0.0, 200.0, 70.0) # Not used in model but requested
     
-    <form action="/predict" method="POST">
-        <div class="form-grid">
-            <div><label>Name</label><input type="text" name="name" required placeholder="Patient Name"></div>
-            <div><label>Age</label><input type="number" name="age" required></div>
-            <div><label>Gender</label>
-                <select name="gender">
-                    <option value="1">Male</option>
-                    <option value="0">Female</option>
-                </select>
-            </div>
-            <div><label>Weight (kg)</label><input type="number" name="weight" required></div>
+    # Clinical Features
+    tb = st.sidebar.number_input("Total Bilirubin", 0.0, 50.0, 0.7)
+    db = st.sidebar.number_input("Direct Bilirubin", 0.0, 30.0, 0.1)
+    alkphos = st.sidebar.number_input("Alkaline Phosphotase", 0.0, 2000.0, 187.0)
+    sgpt = st.sidebar.number_input("Alamine Aminotransferase", 0.0, 2000.0, 16.0)
+    sgot = st.sidebar.number_input("Aspartate Aminotransferase", 0.0, 2000.0, 18.0)
+    tp = st.sidebar.number_input("Total Proteins", 0.0, 15.0, 6.8)
+    alb = st.sidebar.number_input("Albumin", 0.0, 10.0, 3.3)
+    ag = st.sidebar.number_input("A/G Ratio", 0.0, 5.0, 0.9)
 
-            <div><label>Total Bilirubin</label><input type="number" step="0.01" name="total_bilirubin" required placeholder="0.7"></div>
-            <div><label>Direct Bilirubin</label><input type="number" step="0.01" name="direct_bilirubin" required placeholder="0.1"></div>
-            <div><label>Alkaline Phosphotase</label><input type="number" step="0.1" name="alkphos" required placeholder="187"></div>
-            <div><label>Alamine Aminotransferase</label><input type="number" step="0.1" name="sgpt" required placeholder="16"></div>
-            <div><label>Aspartate Aminotransferase</label><input type="number" step="0.1" name="sgot" required placeholder="18"></div>
-            <div><label>Total Proteins</label><input type="number" step="0.1" name="total_protiens" required placeholder="6.8"></div>
-            <div><label>Albumin</label><input type="number" step="0.1" name="albumin" required placeholder="3.3"></div>
-            <div><label>A/G Ratio</label><input type="number" step="0.01" name="ag_ratio" required placeholder="0.9"></div>
-        </div>
-        <button type="submit">Analyze</button>
-    </form>
+    gender_enc = 1 if gender == "Male" else 0
+    
+    data = {
+        'Age': age,
+        'Gender': gender_enc,
+        'Total_Bilirubin': tb,
+        'Direct_Bilirubin': db,
+        'Alkaline_Phosphotase': alkphos,
+        'Alamine_Aminotransferase': sgpt,
+        'Aspartate_Aminotransferase': sgot,
+        'Total_Protiens': tp,
+        'Albumin': alb,
+        'Albumin_and_Globulin_Ratio': ag
+    }
+    features = pd.DataFrame(data, index=[0])
+    return features, name
 
-    {% if prediction_text %}
-    <div id="result" class="result-box" style="background-color: {{ color }};">
-        <h2>{{ prediction_text }}</h2>
-        <p><strong>Patient:</strong> {{ name }}</p>
-        <p>{{ advice }}</p>
-    </div>
-    <script>document.getElementById("result").scrollIntoView({behavior: "smooth", block: "center"});</script>
-    {% endif %}
+input_df, patient_name = user_input_features()
 
-    {% if tree_image %}
-    <div class="tree-section">
-        <h3>Decision Tree Logic</h3>
-        <img src="data:image/png;base64,{{ tree_image }}" alt="Decision Tree">
-    </div>
-    {% endif %}
-</div>
+# --- PREDICTION BUTTON ---
+st.subheader(f"Results for: {patient_name}")
+st.write("Current Patient Vitals:")
+st.dataframe(input_df)
 
-</body>
-</html>
+if st.button("🔍 Analyze Symptoms"):
+    prediction = model.predict(input_df)
+    
+    if prediction[0] == 1:
+        st.error("⚠️ POSITIVE: Liver Disease Detected")
+        st.write("**Recommendation:** Please consult a hepatologist for further testing immediately.")
+    else:
+        st.balloons()
+        st.success("✅ NEGATIVE: No Liver Disease Detected")
+        st.write("**Recommendation:** The patient appears healthy. Maintain a balanced diet.")
+
+# --- VISUALIZATION ---
+st.markdown("---")
+st.subheader("🌳 Decision Tree Visualization")
+if st.checkbox("Show Decision Tree Diagram"):
+    fig, ax = plt.subplots(figsize=(25, 12))
+    plot_tree(model, feature_names=feature_names, class_names=['Healthy', 'Disease'], filled=True, rounded=True, fontsize=10)
+    st.pyplot(fig)
